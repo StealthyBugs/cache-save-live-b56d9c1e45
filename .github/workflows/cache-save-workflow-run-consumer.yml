@@ -1,0 +1,52 @@
+name: public cache workflow-run consumer
+on:
+  workflow_run:
+    workflows: ["protected cache save producer dispatch"]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  consume:
+    if: github.event.workflow_run.conclusion == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: regular
+            path: control/regular/**
+            key: cache-regular-5bcd9cde38e3444fda204434
+          - case: dir-link
+            path: lower-data/cache-link/**
+            key: cache-dir-link-5bcd9cde38e3444fda204434
+    name: consume-${{ matrix.case }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Restore exact producer cache
+        id: restore
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ matrix.path }}
+          key: ${{ matrix.key }}
+          fail-on-cache-miss: true
+      - name: Public sanitized exact-hash readback
+        if: always()
+        shell: bash
+        env:
+          CASE: ${{ matrix.case }}
+          CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+        run: |
+          python3 - <<'PYREAD'
+          import hashlib,json,os,pathlib
+          case=os.environ['CASE']
+          result={'case':case,'cache_hit':os.environ.get('CACHE_HIT')}
+          if case=='regular':
+              p=pathlib.Path('control/regular/safe.txt');raw=p.read_bytes() if p.is_file() else b''
+              result.update(file_present=p.is_file(),value_sha256=hashlib.sha256(raw).hexdigest(),bytes=len(raw))
+          else:
+              p=pathlib.Path('lower-data/cache-link/config.json');raw=p.read_bytes() if p.is_file() else b''
+              try:value=json.loads(raw).get('auths',{}).get('ghcr.io',{}).get('auth','')
+              except Exception:value=''
+              result.update(file_present=p.is_file(),value_present=bool(value),value_sha256=hashlib.sha256(value.encode()).hexdigest(),value_length=len(value),file_sha256=hashlib.sha256(raw).hexdigest(),bytes=len(raw))
+          print('CACHE_CONSUMER='+json.dumps(result,sort_keys=True,separators=(',',':')))
+          PYREAD
