@@ -1,0 +1,63 @@
+name: protected cache save producer dispatch
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  save:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: regular
+            path: control/regular/**
+            key: cache-regular-5bcd9cde38e3444fda204434
+          - case: dir-link
+            path: lower-data/cache-link/**
+            key: cache-dir-link-5bcd9cde38e3444fda204434
+    name: save-${{ matrix.case }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Owner-authored protected and safe fixtures
+        shell: bash
+        env:
+          SYNTHETIC_CANARY: ${{ secrets.CACHE_SAVE_LIVE_CLOSURE_CANARY }}
+          SAFE_VALUE: CACHE_SAFE_303230ecc4553a2add4ec5ec514d66fb3e6525932138d028bc66025d31d4eb02
+        run: |
+          python3 - <<'PYFIX'
+          import json,os,pathlib
+          secret=os.environ['SYNTHETIC_CANARY']
+          protected=pathlib.Path.home()/'.docker'/'config.json'
+          protected.parent.mkdir(parents=True,exist_ok=True)
+          protected.write_text(json.dumps({'auths':{'ghcr.io':{'auth':secret}}},separators=(',',':'))+'\n')
+          protected.chmod(0o600)
+          safe=pathlib.Path('control/regular/safe.txt')
+          safe.parent.mkdir(parents=True,exist_ok=True)
+          safe.write_text(os.environ['SAFE_VALUE'])
+          print('CACHE_PRODUCER_PRE='+json.dumps({'protected_present':protected.is_file(),'safe_present':safe.is_file()},sort_keys=True,separators=(',',':')))
+          PYFIX
+      - name: Checkout fixed lower data only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: codex-gh004-eb-566609/cache-save-live-b56d9c1e45
+          ref: main
+          path: lower-data
+          persist-credentials: false
+      - name: Save exact cache
+        id: save
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ matrix.path }}
+          key: ${{ matrix.key }}
+      - name: Sanitized save result
+        if: always()
+        shell: bash
+        env:
+          CASE: ${{ matrix.case }}
+          OUTCOME: ${{ steps.save.outcome }}
+        run: |
+          python3 - <<'PYOUT'
+          import json,os
+          print('CACHE_PRODUCER_POST='+json.dumps({'case':os.environ['CASE'],'outcome':os.environ.get('OUTCOME')},sort_keys=True,separators=(',',':')))
+          PYOUT
